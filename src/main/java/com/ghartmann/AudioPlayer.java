@@ -4,78 +4,87 @@ import javax.sound.sampled.*;
 import java.io.File;
 
 public class AudioPlayer {
-    private final Mixer mixer;
     private final File audioFile;
+    private final Mixer mixer;
     private SourceDataLine line;
     private FloatControl volumeControl;
     private Thread playThread;
-    private boolean paused = false;
+    private volatile boolean paused = false;
+    private volatile boolean stopped = false;
+    private double pendingVolume = 0.5; // valor padrão
 
-    public AudioPlayer(Mixer mixer, File audioFile) {
-        this.mixer = mixer;
+    public AudioPlayer(File audioFile, Mixer mixer) {
         this.audioFile = audioFile;
+        this.mixer = mixer;
     }
 
     public void play() {
         if (playThread != null && playThread.isAlive()) return;
+        stopped = false;
         playThread = new Thread(() -> {
             try (AudioInputStream ais = AudioSystem.getAudioInputStream(audioFile)) {
-
-                // Formato original
                 AudioFormat baseFormat = ais.getFormat();
+                AudioFormat decodedFormat = baseFormat;
 
-                // Converter para PCM 16-bit
-                AudioFormat decodedFormat = new AudioFormat(
-                        AudioFormat.Encoding.PCM_SIGNED,
-                        baseFormat.getSampleRate(),
-                        16,
-                        baseFormat.getChannels(),
-                        baseFormat.getChannels() * 2,
-                        baseFormat.getSampleRate(),
-                        false
-                );
+                // Só converte se não for PCM_SIGNED 16 bits
+                if (baseFormat.getEncoding() != AudioFormat.Encoding.PCM_SIGNED || baseFormat.getSampleSizeInBits() != 16) {
+                    decodedFormat = new AudioFormat(
+                            AudioFormat.Encoding.PCM_SIGNED,
+                            baseFormat.getSampleRate(),
+                            16,
+                            baseFormat.getChannels(),
+                            baseFormat.getChannels() * 2,
+                            baseFormat.getSampleRate(),
+                            false // little endian
+                    );
+                }
 
-                try (AudioInputStream din = AudioSystem.getAudioInputStream(decodedFormat, ais)) {
+                try (AudioInputStream din = 
+                    decodedFormat == baseFormat ? ais : AudioSystem.getAudioInputStream(decodedFormat, ais)) {
+
                     DataLine.Info info = new DataLine.Info(SourceDataLine.class, decodedFormat);
                     line = (SourceDataLine) mixer.getLine(info);
                     line.open(decodedFormat);
-                    line.start();
 
-                    // Controle de volume
                     if (line.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
                         volumeControl = (FloatControl) line.getControl(FloatControl.Type.MASTER_GAIN);
+                        setVolume(pendingVolume); // aplica o volume desejado imediatamente
                     }
+
+                    line.start();
 
                     byte[] buffer = new byte[4096];
                     int bytesRead;
-                    while ((bytesRead = din.read(buffer)) != -1) {
+                    while (!stopped && (bytesRead = din.read(buffer)) != -1) {
                         synchronized (this) {
-                            while (paused) wait();
+                            while (paused && !stopped) wait();
                         }
+                        if (stopped) break;
                         line.write(buffer, 0, bytesRead);
                     }
+                    line.drain();
                 }
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
-                stop();
+                if (line != null) {
+                    line.stop();
+                    line.close();
+                }
             }
         });
         playThread.start();
     }
 
-    public void stop() {
+    public synchronized void stop() {
+        stopped = true;
         paused = false;
-        if (line != null) {
-            line.drain();
-            line.stop();
-            line.close();
-        }
+        notifyAll();
         if (playThread != null && playThread.isAlive()) playThread.interrupt();
         playThread = null;
     }
 
-    public void pause() {
+    public synchronized void pause() {
         paused = true;
     }
 
@@ -85,6 +94,7 @@ public class AudioPlayer {
     }
 
     public void setVolume(double value) {
+        pendingVolume = value;
         if (volumeControl != null) {
             float min = volumeControl.getMinimum();
             float max = volumeControl.getMaximum();

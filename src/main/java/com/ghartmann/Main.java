@@ -5,12 +5,15 @@ import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import java.io.File;
+import java.io.FilenameFilter;
 
 import javax.sound.sampled.Mixer;
-import java.io.File;
 
 public class Main extends Application {
 
@@ -19,6 +22,7 @@ public class Main extends Application {
     private ComboBox<String> deviceComboBox;
     private ListView<File> soundList;
     private Slider volumeSlider;
+    private KeyCode playPauseKey = null; // tecla configurada pelo usuário
 
     @Override
     public void start(Stage stage) {
@@ -28,6 +32,16 @@ public class Main extends Application {
         if (!deviceComboBox.getItems().isEmpty()) deviceComboBox.getSelectionModel().selectFirst();
 
         soundList = new ListView<>();
+
+        // Adiciona arquivos da pasta padrão
+        File defaultFolder = new File("audios"); // pasta padrão "audios" na raiz do projeto
+        if (defaultFolder.exists() && defaultFolder.isDirectory()) {
+            File[] audioFiles = defaultFolder.listFiles((dir, name) ->
+                    name.toLowerCase().endsWith(".wav") || name.toLowerCase().endsWith(".mp3"));
+            if (audioFiles != null) {
+                soundList.getItems().addAll(audioFiles);
+            }
+        }
 
         Button addSoundBtn = new Button("Adicionar Som");
         addSoundBtn.setOnAction(e -> {
@@ -47,10 +61,10 @@ public class Main extends Application {
             if (selected == null) return;
 
             int index = deviceComboBox.getSelectionModel().getSelectedIndex();
-            Mixer mixer = deviceSelector.getOutputMixers().get(index);
 
             if (audioPlayer == null) {
-                audioPlayer = new AudioPlayer(mixer, selected);
+                Mixer mixer = deviceSelector.getMixer(index); // <-- use o mixer selecionado
+                audioPlayer = new AudioPlayer(selected, mixer);
                 audioPlayer.setVolume(volumeSlider.getValue());
                 audioPlayer.play();
             } else {
@@ -73,15 +87,54 @@ public class Main extends Application {
             if (audioPlayer != null) audioPlayer.setVolume(newVal.doubleValue());
         });
 
+        Button configKeyBtn = new Button("Configurar tecla Play/Pause");
+        Label keyLabel = new Label("Nenhuma tecla configurada");
+
         VBox root = new VBox(10,
                 new Label("Dispositivo de saída:"), deviceComboBox,
                 addSoundBtn, soundList,
                 playBtn, stopBtn,
+                configKeyBtn, keyLabel,
                 new Label("Volume"), volumeSlider);
         root.setPadding(new Insets(10));
 
-        stage.setScene(new Scene(root, 400, 400));
+        Scene scene = new Scene(root, 400, 450);
+        stage.setScene(scene);
         stage.setTitle("JBoard - Soundboard");
+
+        // Adicione os listeners de teclado AQUI, depois de setar a cena!
+        configKeyBtn.setOnAction(e -> {
+            keyLabel.setText("Pressione a tecla desejada...");
+            scene.setOnKeyPressed(event -> {
+                playPauseKey = event.getCode();
+                keyLabel.setText("Tecla configurada: " + playPauseKey.getName());
+                // Remove o listener após configurar
+                scene.setOnKeyPressed(null);
+            });
+        });
+
+        scene.addEventHandler(KeyEvent.KEY_PRESSED, event -> {
+            if (playPauseKey != null && event.getCode() == playPauseKey) {
+                File selected = soundList.getSelectionModel().getSelectedItem();
+                if (selected == null) return;
+
+                int index = deviceComboBox.getSelectionModel().getSelectedIndex();
+
+                if (audioPlayer == null) {
+                    Mixer mixer = deviceSelector.getMixer(index);
+                    audioPlayer = new AudioPlayer(selected, mixer);
+                    audioPlayer.setVolume(volumeSlider.getValue());
+                    audioPlayer.play();
+                } else {
+                    if (audioPlayer.isPaused()) {
+                        audioPlayer.resume();
+                    } else {
+                        audioPlayer.pause();
+                    }
+                }
+            }
+        });
+
         stage.show();
     }
 

@@ -11,7 +11,6 @@ public class DeviceSelector {
         Mixer.Info[] infos = AudioSystem.getMixerInfo();
         for (Mixer.Info info : infos) {
             Mixer mixer = AudioSystem.getMixer(info);
-            // filtramos mixers que suportam SourceDataLine (saída)
             if (mixer.isLineSupported(new DataLine.Info(SourceDataLine.class, getDefaultFormat()))) {
                 outputMixers.add(mixer);
             }
@@ -30,5 +29,12 @@ public class DeviceSelector {
 
     private AudioFormat getDefaultFormat() {
         return new AudioFormat(44100f, 16, 2, true, false);
+    }
+
+    public Mixer getMixer(int index) {
+        if (index >= 0 && index < outputMixers.size()) {
+            return outputMixers.get(index);
+        }
+        return null;
     }
 }
